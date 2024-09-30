@@ -977,7 +977,7 @@ def check_registry_for_unicode(path, root):
                     except OSError:
                         break
         except FileNotFoundError:
-            pass  # Ignore if the key is not found
+            pass 
         except Exception as e:
             print(f"Error accessing registry path {key_path}: {e}")
 
@@ -986,7 +986,7 @@ def check_registry_for_unicode(path, root):
     return unicode_value_names
 
 def unicode_search():
-    prefs_path = r"C:\Windows\Prefetch"  # Focused on the Prefetch directory
+    prefs_path = r"C:\Windows\Prefetch" 
     registry_paths = [
         (r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache", winreg.HKEY_CURRENT_USER),
         (r"Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppSwitched", winreg.HKEY_CURRENT_USER),
