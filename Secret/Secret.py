@@ -17,6 +17,9 @@ from bs4 import BeautifulSoup
 import fade
 import colorama
 from colorama import Fore
+import winreg
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 SYSINTERNALS_TEMP_DIR = os.path.join(os.getenv('TEMP'), 'Sysinternals')
 PE_CMD_URL = 'https://download.ericzimmermanstools.com/net6/PECmd.zip'
@@ -934,7 +937,88 @@ def deleted_bam_check():
         print(f"An error occurred: {e}")
 
 
+def is_unicode(string):
+    return any(ord(char) > 127 for char in string)
 
+def find_unicode_files(prefs_path):
+    unicode_files = []
+    try:
+        for root, _, files in os.walk(prefs_path, topdown=True):
+            for filename in files:
+                if is_unicode(filename):
+                    full_path = Path(root) / filename
+                    unicode_files.append(full_path)
+    except Exception as e:
+        print(f"Error accessing the Prefetch directory: {e}")
+    return unicode_files
+
+def check_registry_for_unicode(path, root):
+    unicode_value_names = []
+
+    def check_key(key_path, root_key, root_name):
+        try:
+            with winreg.OpenKey(root_key, key_path) as key:
+                i = 0
+                while True:
+                    try:
+                        value_name, value_data, _ = winreg.EnumValue(key, i)
+                        if is_unicode(value_name):
+                            full_reg_path = f"{root_name}\\{key_path}"
+                            unicode_value_names.append(f"Unicode value names found in registry path {full_reg_path}\nValue Name: '{value_name}' = {value_data}\n")
+                        i += 1
+                    except OSError:
+                        break
+                j = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(key, j)
+                        check_key(f"{key_path}\\{subkey_name}", root_key, root_name)
+                        j += 1
+                    except OSError:
+                        break
+        except FileNotFoundError:
+            pass  # Ignore if the key is not found
+        except Exception as e:
+            print(f"Error accessing registry path {key_path}: {e}")
+
+    check_key(path, root, "HKEY_LOCAL_MACHINE" if root == winreg.HKEY_LOCAL_MACHINE else "HKEY_CURRENT_USER")
+    
+    return unicode_value_names
+
+def unicode_search():
+    prefs_path = r"C:\Windows\Prefetch"  # Focused on the Prefetch directory
+    registry_paths = [
+        (r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache", winreg.HKEY_CURRENT_USER),
+        (r"Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppSwitched", winreg.HKEY_CURRENT_USER),
+        (r"Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\ShowJumpView", winreg.HKEY_CURRENT_USER),
+        (r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers", winreg.HKEY_CURRENT_USER),
+        (r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers", winreg.HKEY_LOCAL_MACHINE),
+        (r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store", winreg.HKEY_CURRENT_USER),
+        (r"SYSTEM\ControlSet001\Services\bam\State\UserSettings", winreg.HKEY_LOCAL_MACHINE)
+    ]
+
+    unicode_filenames = []
+    
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        future_files = executor.submit(find_unicode_files, prefs_path)
+        
+        future_registry = {executor.submit(check_registry_for_unicode, path, root): path for path, root in registry_paths}
+        
+        unicode_filenames = future_files.result()
+
+        for future in as_completed(future_registry):
+            path = future_registry[future]
+            try:
+                unicode_value_names = future.result()
+                for value in unicode_value_names:
+                    print(value)
+            except Exception as e:
+                print(f"Error checking registry path {path}: {e}")
+
+    if unicode_filenames:
+        print("Files with Unicode characters in the name in Prefetch:")
+        for path in unicode_filenames:
+            print(path)
 
 def main():
     setup_sysinternals_tools()
@@ -996,6 +1080,7 @@ def main():
 
     user_recent_folder = os.path.join(os.environ['USERPROFILE'], 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Recent')
     regex_dps()
+    unicode_search()
     check_recent_files(user_recent_folder)
     event_logs_cleared(boot_time)
     deleted_bam_check()
