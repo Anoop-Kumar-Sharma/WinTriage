@@ -1088,6 +1088,5 @@ def main():
     parse_pca()
     bam_detection()
 
-
 if __name__ == "__main__":
     main()
