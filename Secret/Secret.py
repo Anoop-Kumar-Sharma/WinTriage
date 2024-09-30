@@ -566,18 +566,21 @@ def get_authenticode_signature(file_path):
 def is_file_unsigned(signature_output):
     return "Unsigned" in signature_output
 
-def worker(queue):
+def worker(queue, python_files):
     pythoncom.CoInitialize()
     while not queue.empty():
         item = queue.get()
-        process_item(item)
+        process_item(item, python_files)
         queue.task_done()
 
-def process_item(item):
+def process_item(item, python_files):
     try:
         if item.lower().endswith('.lnk'):
             target_path = get_shortcut_target(item)
             if target_path:
+                if target_path.lower().endswith('.py'):
+                    python_files.append(target_path)
+                
                 signature_output = get_authenticode_signature(target_path)
                 if signature_output and is_file_unsigned(signature_output):
                     print(f"Unsigned: {target_path}")
@@ -589,16 +592,28 @@ def check_recent_files(recent_folder, num_threads=5):
 
     if not recent_items:
         print("\033[93m⚠️ No items found in the Recent folder.\033[0m")
+        return
+    
+    python_files = []  
     queue = Queue()
+    
     for item in recent_items:
         queue.put(item)
+    
     threads = []
     for _ in range(num_threads):
-        thread = threading.Thread(target=worker, args=(queue,))
+        thread = threading.Thread(target=worker, args=(queue, python_files))
         thread.start()
         threads.append(thread)
+    
     for thread in threads:
         thread.join()
+    
+    if python_files:
+        print("\nRecently Accessed Python Files:")
+        for path in python_files:
+            print(path)
+
 def event_logs_cleared(boot_time):
         ps_script_1102 = """
         Get-WinEvent -LogName Security | Where-Object {$_.Id -eq 1102} | ForEach-Object {
@@ -854,17 +869,25 @@ foreach ($Sid in $Users) {
 $ExecutedUnsigned = $BamResults | Where-Object { $_.Signature -match "Invalid Signature" }
 $ExecutedDeleted = $BamResults | Where-Object { $_.Signature -eq "File Was Not Found" }
 
-
 $bootTimeUtc = Get-BootTime
 
 $ExecutedUnsignedFiltered = $ExecutedUnsigned | Where-Object { $_.'Last Execution Time (UTC)' -gt $bootTimeUtc }
 $ExecutedDeletedFiltered = $ExecutedDeleted | Where-Object { $_.'Last Execution Time (UTC)' -gt $bootTimeUtc }
 
-Write-Host -ForegroundColor Yellow "Executed Unsigned (After Boot Time):"
-$ExecutedUnsignedFiltered | Select-Object 'Last Execution Time', 'Last Execution Time (UTC)', 'Path' | Format-Table -AutoSize
+if ($ExecutedUnsignedFiltered) {
+    Write-Host -ForegroundColor Yellow "Executed Unsigned (After Boot Time):"
+    $ExecutedUnsignedFiltered | Select-Object 'Last Execution Time', 'Last Execution Time (UTC)', 'Path' | Format-Table -AutoSize
+} else {
+    Write-Host -ForegroundColor Yellow "No Executed Unsigned Entries Found."
+}
 
-Write-Host -ForegroundColor Yellow "Executed Deleted (After Boot Time):"
-$ExecutedDeletedFiltered | Select-Object 'Last Execution Time', 'Path' | Format-Table -AutoSize
+if ($ExecutedDeletedFiltered) {
+    Write-Host -ForegroundColor Yellow "Executed Deleted (After Boot Time):"
+    $ExecutedDeletedFiltered | Select-Object 'Last Execution Time', 'Path' | Format-Table -AutoSize
+} else {
+    Write-Host -ForegroundColor Yellow "No Executed Deleted Entries Found."
+}
+
 
 """
 
