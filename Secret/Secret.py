@@ -2,35 +2,35 @@
 import datetime
 import re
 import os
-from tkinter import LAST
 import requests
 import zipfile
 import stat
 import glob
-import time
 import win32com.client
 import threading
 import pythoncom
 from queue import Queue
-from dateutil import parser
 from bs4 import BeautifulSoup
-import fade
-import colorama
 from colorama import Fore
 import winreg
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import pandas as pd
+import psutil
+import asyncio
 
 SYSINTERNALS_TEMP_DIR = os.path.join(os.getenv('TEMP'), 'Sysinternals')
 PE_CMD_URL = 'https://download.ericzimmermanstools.com/net6/PECmd.zip'
 PROCDUMP_URL = 'https://download.sysinternals.com/files/Procdump.zip'
 STRINGS_URL = 'https://download.sysinternals.com/files/Strings.zip'
+MFTECMD_URL = 'https://download.mikestammer.com/net6/MFTECmd.zip'
 BD_URL = 'https://cdn.discordapp.com/attachments/1268096855431053383/1288146554787729438/bd.zip?ex=66fb5fb7&is=66fa0e37&hm=4cd84eedb52a2e6d0445ecfbf2c84358ea68b46316b73fd174018f706348f3f5'
 BD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd.zip')
 BD_EXTRACT_TO = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd')
 PROCDUMP_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'procdump', 'procdump.exe')
 STRINGS_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'strings', 'strings.exe')
 PE_CMD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'PECmd', 'PECmd.exe')
+MFTECMD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'MFTECmd', 'MFTECmd.exe')
 
 
 
@@ -78,15 +78,17 @@ def setup_sysinternals_tools():
     procdump_zip = os.path.join(SYSINTERNALS_TEMP_DIR, 'Procdump.zip')
     strings_zip = os.path.join(SYSINTERNALS_TEMP_DIR, 'Strings.zip')
     pe_cmd_zip = os.path.join(SYSINTERNALS_TEMP_DIR, 'PECmd.zip')
-
+    mftecmd_zip = os.path.join(SYSINTERNALS_TEMP_DIR, 'MFTECmd.zip')
     if not os.path.isfile(PROCDUMP_PATH) or not os.path.isfile(STRINGS_PATH) or not os.path.isfile(PE_CMD_PATH):
         download_file(PROCDUMP_URL, procdump_zip)
         download_file(STRINGS_URL, strings_zip)
         download_file(PE_CMD_URL, pe_cmd_zip)
+        download_file(MFTECMD_URL, mftecmd_zip)
 
         unzip_file(procdump_zip, os.path.join(SYSINTERNALS_TEMP_DIR, 'procdump'))
         unzip_file(strings_zip, os.path.join(SYSINTERNALS_TEMP_DIR, 'strings'))
         unzip_file(pe_cmd_zip, os.path.join(SYSINTERNALS_TEMP_DIR, 'PECmd'))
+        unzip_file(mftecmd_zip, os.path.join(SYSINTERNALS_TEMP_DIR, 'MFTECmd'))
 
     if not os.path.exists(BD_EXTRACT_TO):
         download_file(BD_URL, BD_PATH)
@@ -117,7 +119,7 @@ def get_system_uptime():
         match = re.search(r'System Boot Time:\s*(.+)', output)
         if match:
             boot_time_str = match.group(1).strip()
-            boot_time = parser.parse(boot_time_str)
+            boot_time = datetime.datetime.strptime(boot_time_str, '%d-%m-%Y, %H:%M:%S')
             return boot_time
         else:
             return None
@@ -215,7 +217,7 @@ def get_install_date():
 
 def check_pc_reset(install_date):
     now = datetime.datetime.now()
-    if now - install_date <= datetime.timedelta(hours=1000000000):
+    if now - install_date <= datetime.timedelta(hours=48):
         return format_time_elapsed(install_date)
     return None
 
@@ -273,47 +275,58 @@ def format_time_display(event_time):
 
 def check_usn_journal_deletions(boot_time):
     try:
+
         file_time = get_file_time_from_fsutil()
         now = datetime.datetime.now()
 
-        if file_time and (now - file_time) <= datetime.timedelta(hours=0):
-            print(f"\033[91mUSN Journal Deleted {format_time_display(file_time)}\033[0m")
-            return True
+        if file_time:
 
-        
+            if now - file_time <= datetime.timedelta(hours=48):
+                print(f"\033[91mUSN Journal Deleted {format_time_display(file_time)}\033[0m")
+                return True
+
+
         ps_script_3079 = """
         Get-WinEvent -LogName Application | Where-Object {$_.Id -eq 3079} | ForEach-Object {
-            "{0} {1} {2}" -f $_.Id, $_.TimeCreated, $_.Message
+            $message = "{0} {1} {2}" -f $_.Id, $_.TimeCreated, $_.Message
+            Write-Output $message
         }
         """
         result_3079 = subprocess.run(["powershell", "-Command", ps_script_3079], capture_output=True, text=True)
         output_3079 = result_3079.stdout.strip()
 
         if output_3079:
-            for line in output_3079.splitlines():
-                try:
-                    
-                    if len(line.split()) >= 3:
-                        event_time = parser.parse(" ".join(line.split()[1:3]))
-                        if event_time > boot_time:
-                            print(f"USN Journal Deleted {format_time_display(event_time)}")
-                            return True
-                except Exception as e:
-                    print(f"Error parsing event time: {e}")
+            lines = output_3079.splitlines()
+            for line in lines:
 
-        
+                try:
+                    time_str = line.split()[1] + " " + line.split()[2]
+                    event_time = datetime.datetime.strptime(time_str, '%d-%m-%Y %H:%M:%S')
+
+                    if event_time > boot_time:
+                        print(f"USN Journal Deleted {format_time_display(event_time)}")
+                        return True
+                except Exception as e:
+                    
+                    continue
+
+
         ps_script_ntfs = """
         Get-WinEvent -LogName Microsoft-Windows-Ntfs/Operational | Where-Object {$_.Id -eq 501} | ForEach-Object {
-            "{0} {1} {2}" -f $_.Id, $_.TimeCreated, $_.Message
+            $message = "{0} {1} {2}" -f $_.Id, $_.TimeCreated, $_.Message
+            Write-Output $message
         }
         """
         result_ntfs = subprocess.run(["powershell", "-Command", ps_script_ntfs], capture_output=True, text=True)
         output_ntfs = result_ntfs.stdout.strip()
 
         if output_ntfs:
+            lines = output_ntfs.splitlines()
             events = []
             current_event = ""
-            for line in output_ntfs.splitlines():
+
+
+            for line in lines:
                 if line.startswith('501'):
                     if current_event:
                         events.append(current_event)
@@ -330,22 +343,24 @@ def check_usn_journal_deletions(boot_time):
             for event in events:
                 try:
                     lines = event.splitlines()
-                    
-                    if len(lines[0].split()) >= 3:
-                        event_time = parser.parse(" ".join(lines[0].split()[1:3]))
-                        if event_time > boot_time:
-                            if "Process: fsutil.exe" in event:
-                                fsutil_events.append((event_time, event))
-                            else:
-                                other_events.append((event_time, event))
+                    time_str = lines[0].split()[1] + " " + lines[0].split()[2]
+                    event_time = datetime.datetime.strptime(time_str, '%d-%m-%Y %H:%M:%S')
+
+                    if event_time > boot_time:
+                        if "Process: fsutil.exe" in event:
+                            fsutil_events.append((event_time, event))
+                        else:
+                            other_events.append((event_time, event))
                 except Exception as e:
                     print(f"Error parsing NTFS event time: {e}")
 
             if fsutil_events:
+
                 latest_fsutil_event = max(fsutil_events, key=lambda x: x[0])
                 fsutil_time, fsutil_event = latest_fsutil_event
                 fsutil_lines = fsutil_event.splitlines()
                 current_usn_line = next((line for line in fsutil_lines if "Current USN:" in line), None)
+
 
                 similar_events = [
                     (other_time, other_event) for other_time, other_event in other_events
@@ -353,6 +368,7 @@ def check_usn_journal_deletions(boot_time):
                 ]
 
                 usn_deleted = current_usn_line and "0x0" in current_usn_line
+
 
                 if similar_events:
                     usn_confirmed_deleted = any("Current USN: 0x0" in other_event for other_time, other_event in similar_events)
@@ -369,6 +385,7 @@ def check_usn_journal_deletions(boot_time):
                     else:
                         print(f"Possible Journal Deleted {format_time_display(fsutil_time)}")
                         return False
+
 
         return False
 
@@ -633,7 +650,7 @@ def event_logs_cleared(boot_time):
                     event_time = datetime.datetime.strptime(time_str, '%d-%m-%Y %H:%M:%S')
 
                     if event_time > boot_time:
-                        print(f"Eventlogs Cleared {format_time_display(event_time)}\n")
+                        print(f"USN Journal Deleted {format_time_display(event_time)}")
                         return True
                 except Exception as e:
                     
@@ -643,148 +660,6 @@ def event_logs_cleared(boot_time):
                         
 
 def bam_detection():
-    bam_script = r"""
-    $ErrorActionPreference = "SilentlyContinue"
-
-function Get-Signature {
-    param ([string[]]$FilePath)
-    if (Test-Path -PathType "Leaf" -Path $FilePath) {
-        $Authenticode = (Get-AuthenticodeSignature -FilePath $FilePath -ErrorAction SilentlyContinue).Status
-        switch ($Authenticode) {
-            "Valid" { return "Valid Signature" }
-            "NotSigned" { return "Invalid Signature (NotSigned)" }
-            "HashMismatch" { return "Invalid Signature (HashMismatch)" }
-            "NotTrusted" { return "Invalid Signature (NotTrusted)" }
-            "UnknownError" { return "Invalid Signature (UnknownError)" }
-        }
-    }
-    return "File Was Not Found"
-}
-
-function Test-Admin {
-    $currentUser = New-Object Security.Principal.WindowsPrincipal $([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $currentUser.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
-}
-
-function Get-BootTime {
-    $bootTime = (Get-WmiObject Win32_OperatingSystem).LastBootUpTime
-    return [Management.ManagementDateTimeConverter]::ToDateTime($bootTime).ToUniversalTime()
-}
-
-if (!(Test-Admin)) {
-    Write-Warning "Permission Error"
-    Start-Sleep 10
-    Exit
-}
-
-$sw = [Diagnostics.Stopwatch]::StartNew()
-
-if (!(Get-PSDrive -Name HKLM -PSProvider Registry)) {
-    Try {
-        New-PSDrive -Name HKLM -PSProvider Registry -Root HKEY_LOCAL_MACHINE
-    } Catch {
-        Write-Warning "Error Mounting HKEY_Local_Machine"
-    }
-}
-
-$bv = ("bam", "bam\State")
-$Users = @()
-
-foreach ($ii in $bv) {
-    $Users += Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$($ii)\UserSettings\" | Select-Object -ExpandProperty PSChildName
-}
-
-$rpath = @("HKLM:\SYSTEM\CurrentControlSet\Services\bam\", "HKLM:\SYSTEM\CurrentControlSet\Services\bam\state\")
-$BamResults = @()
-
-foreach ($Sid in $Users) {
-    foreach ($rp in $rpath) {
-        $BamItems = Get-Item -Path "$($rp)UserSettings\$Sid" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Property
-        
-        foreach ($Item in $BamItems) {
-            $Key = Get-ItemProperty -Path "$($rp)UserSettings\$Sid" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty $Item
-            
-            if ($Key.length -eq 24) {
-                $Hex = [System.BitConverter]::ToString($Key[7..0]) -replace "-", ""
-                $Time = Get-Date ([DateTime]::FromFileTimeUtc([Convert]::ToInt64($Hex, 16))) -Format "yyyy-MM-dd HH:mm:ss"
-                $UtcTime = Get-Date ([DateTime]::FromFileTimeUtc([Convert]::ToInt64($Hex, 16))).ToUniversalTime()
-                $Path = if ($Item -match '\d{1}') { Join-Path -Path "C:" -ChildPath ($Item.Remove(1, 23)) } else { "" }
-                $Signature = Get-Signature -FilePath $Path
-
-                if ($Signature -match "Invalid Signature|File Was Not Found") {
-                    $BamResults += [PSCustomObject]@{
-                        'Last Execution Time' = $Time
-                        'Last Execution Time (UTC)' = $UtcTime
-                        'Path' = $Path
-                        'Signature' = $Signature
-                    }
-                }
-            }
-        }
-    }
-}
-
-$ExecutedUnsigned = $BamResults | Where-Object { $_.Signature -match "Invalid Signature" }
-$ExecutedDeleted = $BamResults | Where-Object { $_.Signature -eq "File Was Not Found" }
-
-
-$bootTimeUtc = Get-BootTime
-
-$ExecutedUnsignedFiltered = $ExecutedUnsigned | Where-Object { $_.'Last Execution Time (UTC)' -gt $bootTimeUtc }
-$ExecutedDeletedFiltered = $ExecutedDeleted | Where-Object { $_.'Last Execution Time (UTC)' -gt $bootTimeUtc }
-
-Write-Host -ForegroundColor Yellow "Executed Unsigned (After Boot Time):"
-$ExecutedUnsignedFiltered | Select-Object 'Last Execution Time', 'Last Execution Time (UTC)', 'Path' | Format-Table -AutoSize
-
-Write-Host -ForegroundColor Yellow "Executed Deleted (After Boot Time):"
-$ExecutedDeletedFiltered | Select-Object 'Last Execution Time', 'Path' | Format-Table -AutoSize
-
-
-    """
-
-    try:
-        result = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-Command", bam_script],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: {e.stderr}")
-
-def get_usb_devices():
-    command = 'wmic path Win32_USBHub get DeviceID'
-    output = subprocess.check_output(command, shell=True)
-
-    filtered_output = [item for item in output.decode("utf-8").split("\n") if "VID_" in item or "PID_" in item]
-
-    vid_pid_values = [(item.split("VID_")[1].split("&")[0], item.split("PID_")[1].split("\\")[0]) for item in filtered_output]
-
-    for vid, pid in vid_pid_values:
-        try:
-            url = f"https://devicehunt.com/search/type/usb/vendor/{vid}/device/{pid}"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status() 
-
-            soup = BeautifulSoup(response.content, 'html.parser')
-           
-            device_line = soup.select_one('h3.details__heading')
-            vendor_line = soup.select_one('h3.details__heading') 
-           
-            if device_line:
-                print(Fore.GREEN + "[+]" + Fore.WHITE + f" Detected {vid} + {pid} as: {device_line.text.strip()}\n")
-            else:
-                print(Fore.RED + "[!]" + Fore.WHITE + f" Device details not found for {vid} + {pid}.\n")
-
-        except requests.exceptions.Timeout:
-            print(Fore.RED + "[!]" + Fore.WHITE + f" Timeout error for {vid} + {pid} device.\n")
-        except requests.exceptions.HTTPError as err:
-            print(Fore.RED + "[!]" + Fore.WHITE + f" HTTP error occurred for {vid} + {pid}: {err}\n")
-        except Exception as e:
-            print(Fore.RED + "[!]" + Fore.WHITE + f" An error occurred for {vid} + {pid}: {e}\n")
-
-def parse_pca():
     powershell_script = r""" 
 $ErrorActionPreference = "SilentlyContinue"
 
@@ -877,15 +752,11 @@ $ExecutedDeletedFiltered = $ExecutedDeleted | Where-Object { $_.'Last Execution 
 if ($ExecutedUnsignedFiltered) {
     Write-Host -ForegroundColor Yellow "Executed Unsigned (After Boot Time):"
     $ExecutedUnsignedFiltered | Select-Object 'Last Execution Time', 'Last Execution Time (UTC)', 'Path' | Format-Table -AutoSize
-} else {
-    Write-Host -ForegroundColor Yellow "No Executed Unsigned Entries Found."
 }
 
 if ($ExecutedDeletedFiltered) {
     Write-Host -ForegroundColor Yellow "Executed Deleted (After Boot Time):"
     $ExecutedDeletedFiltered | Select-Object 'Last Execution Time', 'Path' | Format-Table -AutoSize
-} else {
-    Write-Host -ForegroundColor Yellow "No Executed Deleted Entries Found."
 }
 
 
@@ -897,6 +768,233 @@ if ($ExecutedDeletedFiltered) {
         subprocess.run(command, check=True, text=True)
     except subprocess.CalledProcessError as e:
         print(f"An error occurred: {e}")   
+
+def get_usb_devices():
+    command = 'wmic path Win32_USBHub get DeviceID'
+    output = subprocess.check_output(command, shell=True)
+
+    filtered_output = [item for item in output.decode("utf-8").split("\n") if "VID_" in item or "PID_" in item]
+
+    vid_pid_values = [(item.split("VID_")[1].split("&")[0], item.split("PID_")[1].split("\\")[0]) for item in filtered_output]
+
+    for vid, pid in vid_pid_values:
+        try:
+            url = f"https://devicehunt.com/search/type/usb/vendor/{vid}/device/{pid}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status() 
+
+            soup = BeautifulSoup(response.content, 'html.parser')
+           
+            device_line = soup.select_one('h3.details__heading')
+            vendor_line = soup.select_one('h3.details__heading') 
+           
+            if device_line:
+                print(Fore.GREEN + "[+]" + Fore.WHITE + f" Detected {vid} + {pid} as: {device_line.text.strip()}\n")
+            else:
+                print(Fore.RED + "[!]" + Fore.WHITE + f" Device details not found for {vid} + {pid}.\n")
+
+        except requests.exceptions.Timeout:
+            print(Fore.RED + "[!]" + Fore.WHITE + f" Timeout error for {vid} + {pid} device.\n")
+        except requests.exceptions.HTTPError as err:
+            print(Fore.RED + "[!]" + Fore.WHITE + f" HTTP error occurred for {vid} + {pid}: {err}\n")
+        except Exception as e:
+            print(Fore.RED + "[!]" + Fore.WHITE + f" An error occurred for {vid} + {pid}: {e}\n")
+
+def parse_pca():
+    powershell_script = r""" 
+param
+(
+    [string]$inputPath = 'C:\Windows\appcompat\pca',
+    [string]$outputPath = 'C:\Users\DFIR HQ\AppData\Local\Temp\Sysinternals',
+    [string]$booTime = '00:00:00'
+)
+
+function Get-TimeStamp {
+    return "[{0:yyyy/MM/dd} {0:HH:mm:ss}]" -f (Get-Date)
+}
+
+function Log {
+    param
+    (
+        [Parameter(Mandatory = $true, Position = 1)]
+        [string]$logFile,
+        [Parameter(Mandatory = $true, Position = 2)]
+        [string]$msg,
+        [Parameter(Mandatory = $false, Position = 3)]
+        [ValidateSet("Info", "Warning", "Error")]
+        [string]$level = "Info"
+    )
+
+    $timestamp = Get-TimeStamp
+    $logMessage = "$timestamp | $level | $msg"
+    Add-Content -Path $logFile -Value $logMessage -Encoding ASCII
+
+    switch ($level) {
+        'Info'    { Write-Host $logMessage -ForegroundColor Cyan }
+        'Warning' { Write-Host "$level | $msg" -ForegroundColor Yellow }
+        'Error'   { Write-Host $logMessage -ForegroundColor Red }
+    }
+}
+
+$logFile = "$PSScriptRoot\PCAParser.log"
+
+if (!(Test-Path -Path $outputPath)) {
+    New-Item -ItemType Directory -Force -Path $outputPath
+}
+
+function Check-ExecutableSignature {
+    param (
+        [string]$executablePath
+    )
+
+    if (Test-Path $executablePath) {
+        $signature = Get-AuthenticodeSignature -FilePath $executablePath
+        if ($signature.Status -ne 'Valid') {
+            Log -logFile $logFile -msg "Signature is invalid for $executablePath" -level "Warning"
+        } 
+        return $signature.Status
+    } else {
+        Log -logFile $logFile -msg "Executed and deleted: $executablePath" -level "Warning"
+        return $null
+    }
+}
+
+function Check-FileValidity {
+    param (
+        [string]$filePath,
+        [string]$expectedFormat
+    )
+
+    $fileInfo = Get-Item $filePath
+
+   
+    if ($fileInfo.Attributes -match 'ReadOnly') {
+        Log -logFile $logFile -msg "$filePath is read-only." -level "Warning"
+    }
+
+    if ($fileInfo.LastWriteTime -gt [datetime]::Parse($booTime)) {
+        if ($fileInfo.Length -eq 0) {
+            Log -logFile $logFile -msg "PCA Bypass Detected: $filePath is empty." -level "Warning"
+            return $false
+        }
+        else {
+            $content = Get-Content -Path $filePath
+            if ($content -notmatch $expectedFormat) {
+                Log -logFile $logFile -msg "PCA Bypass Detected: $filePath does not match expected format." -level "Warning"
+                return $false
+            }
+        }
+    }
+    return $true
+}
+
+function Parse-PcaAppLaunchDic {
+    param ()
+    $fileMaskPcaAppLaunchDic = 'PcaAppLaunchDic.txt'
+    
+    $files = Get-ChildItem -Path $inputPath -Filter $fileMaskPcaAppLaunchDic -Recurse -File
+
+    if ($null -eq $files) {
+        return
+    }
+
+    foreach ($file in $files) {
+        if (-not (Check-FileValidity -filePath $file.FullName -expectedFormat '.*\|.*')) {
+            continue
+        }
+
+        $lines = Get-Content -Path $file.FullName
+        if ($lines.Count -eq 0) {
+            Log -logFile $logFile -msg "No lines found in file $($file.FullName)" -level "Warning"
+        }
+
+        foreach ($line in $lines) {
+            $splitLine = $line -split '\|'
+            $runtime = $splitLine[1]
+            if ([datetime]::Parse($runtime) -gt [datetime]::Parse($booTime)) {
+                $executablePath = $splitLine[0]
+                $signatureStatus = Check-ExecutableSignature -executablePath $executablePath
+
+                
+                if ($signatureStatus -ne 'Valid') {
+                    $outputObj = New-Object PSObject -Property @{
+                        'ExecutablePath' = $executablePath
+                        'Runtime'        = $runtime
+                        'SignatureStatus' = $signatureStatus
+                    }
+                    $outputObj | Format-Table -AutoSize
+                }
+            }
+        }
+    }
+}
+
+function Parse-PcaGeneralDb {
+    param ()
+    $fileMaskPcaGeneralDb = 'PcaGeneralDb*.txt'
+
+    $files = Get-ChildItem -Path $inputPath -Filter $fileMaskPcaGeneralDb -Recurse -File
+
+    if ($null -eq $files) {
+        return
+    }
+
+    foreach ($file in $files) {
+        if (-not (Check-FileValidity -filePath $file.FullName -expectedFormat '.*\|.*')) {
+            continue
+        }
+
+        $lines = Get-Content -Path $file.FullName -Encoding Unicode
+        if ($lines.Count -eq 0) {
+            Log -logFile $logFile -msg "No lines found in file $($file.FullName)" -level "Warning"
+        }
+
+        foreach ($line in $lines) {
+            $splitLine = $line -split '\|'
+            $runtime = $splitLine[0]
+            if ([datetime]::Parse($runtime) -gt [datetime]::Parse($booTime)) {
+                $executablePath = $splitLine[2]
+                $signatureStatus = Check-ExecutableSignature -executablePath $executablePath
+
+                if ($signatureStatus -ne 'Valid') {
+                    $outputObj = New-Object PSObject -Property @{
+                        'Runtime'        = $runtime
+                        'RunStatus'      = $splitLine[1]
+                        'ExecutablePath' = $executablePath
+                        'FileDescription' = $splitLine[3]
+                        'SoftwareVendor'  = $splitLine[4]
+                        'FileVersion'    = $splitLine[5]
+                        'ProgramId'      = $splitLine[6]
+                        'ExitcodeValue'  = $splitLine[7]
+                        'SignatureStatus' = $signatureStatus
+                    }
+                    $outputObj | Format-Table -AutoSize
+                }
+            }
+        }
+    }
+}
+
+try {
+    Parse-PcaAppLaunchDic
+    Parse-PcaGeneralDb
+}
+catch [System.IO.IOException] {
+    Log -logFile $logFile -msg "IOException occurred: $($_.Message)" -level "Error"
+}
+catch [System.Exception] {
+    Log -logFile $logFile -msg "Exception occurred: $($_.Exception.Message)" -level "Error"
+}
+
+"""
+
+    command = ["powershell", "-Command", powershell_script]
+
+    try:
+        subprocess.run(command, check=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred: {e}")   
+
 
 def regex_dps():
     dps_file_path = os.path.join(os.getenv('TEMP'), 'Sysinternals', 'dps.txt')
@@ -1043,6 +1141,124 @@ def unicode_search():
         for path in unicode_filenames:
             print(path)
 
+
+
+def run_command(command):
+    result = subprocess.run(command, capture_output=True, text=True)
+    result.check_returncode()
+    return result.stdout
+
+
+def utcboot():
+    return pd.to_datetime(psutil.boot_time(), unit='s', utc=True)
+
+def process_mftcsv(csv_path, boot_time):
+    df = pd.read_csv(csv_path, low_memory=False)
+
+    required_columns = ['LastAccess0x10', 'FileName', 'ParentPath']
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError(f"CSV file must contain columns: {', '.join(required_columns)}")
+
+    df['LastAccess0x10'] = pd.to_datetime(df['LastAccess0x10'], errors='coerce', utc=True)
+    df = df.dropna(subset=['LastAccess0x10'])
+    df = df[df['LastAccess0x10'] > boot_time]
+    df['FileName'] = df['FileName'].astype(str)
+    df['ParentPath'] = df['ParentPath'].astype(str)
+
+    valid_extensions = ['.exe', '.bat', '.jar', '.dll', '.py']
+    df = df[df['FileName'].str.endswith(tuple(valid_extensions))]
+
+    return df
+
+async def signature(file_paths):
+    if not file_paths:
+        return []
+    
+    ps_script = " ; ".join([f"(Get-AuthenticodeSignature '{file}').Status" for file in file_paths])
+    command = ["powershell", "-Command", ps_script]
+    
+    result = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, _ = await result.communicate()
+    
+    statuses = stdout.decode().strip().splitlines()
+    return list(zip(file_paths, statuses))
+
+async def mft():
+    unsigned_executables = []
+    unsigned_dlls = []
+    bat_files = []
+    jar_files = []
+    py_files = []
+    deleted_files = []  
+
+    command = [MFTECMD_PATH, "-f", "C:\\$MFT", "--csv", SYSINTERNALS_TEMP_DIR, "--csvf", "mft.csv"]
+    run_command(command)
+
+    csv_path = os.path.join(SYSINTERNALS_TEMP_DIR, 'mft.csv')
+    boot_time = utcboot()
+    df_filtered = process_mftcsv(csv_path, boot_time)
+
+    exe_files = []
+    dll_files = []
+    for _, row in df_filtered.iterrows():
+        parent_path = row['ParentPath'].lstrip('.\\').replace('./', '')
+        parent_path = os.path.join('C:\\', parent_path) if not parent_path.startswith('C:\\') else parent_path
+        
+        filepath = os.path.join(parent_path, row['FileName'])
+        if not os.path.exists(filepath):
+            deleted_files.append(filepath)
+            continue 
+
+        if row['FileName'].endswith('.exe'):
+            exe_files.append(filepath)
+        elif row['FileName'].endswith('.bat'):
+            bat_files.append(filepath)
+        elif row['FileName'].endswith('.jar'):
+            jar_files.append(filepath)
+        elif row['FileName'].endswith('.py'):
+            py_files.append(filepath)
+        elif row['FileName'].endswith('.dll'):
+            dll_files.append(filepath)
+    batch_size = 100
+    tasks = []
+
+    for i in range(0, len(exe_files), batch_size):
+        batch = exe_files[i:i + batch_size]
+        tasks.append(signature(batch))
+
+    for i in range(0, len(dll_files), batch_size):
+        batch = dll_files[i:i + batch_size]
+        tasks.append(signature(batch))
+    results = await asyncio.gather(*tasks)
+
+    for batch_results in results:
+        for filepath, signature_status in batch_results:
+            if signature_status in ["NotSigned", ""]:
+                if filepath.endswith('.exe'):
+                    unsigned_executables.append(filepath)
+                elif filepath.endswith('.dll'):
+                    unsigned_dlls.append(filepath)
+
+    if unsigned_executables:
+        print("Unsigned Executables:")
+        print("\n".join(unsigned_executables))
+    if unsigned_dlls:
+        print("Executed Unsigned DLLs:")
+        print("\n".join(unsigned_dlls))
+    if py_files:
+        print("Executed Python files:")
+        print("\n".join(py_files))    
+    if bat_files:
+        print("Executed Batch files:")
+        print("\n".join(bat_files))
+    if jar_files:
+        print("Executed JAR files:")
+        print("\n".join(jar_files))
+    if deleted_files:
+        print("Executed and Deleted Files:")
+        print("\n".join(deleted_files))
+
+
 def main():
     setup_sysinternals_tools()
     dump_services_and_processes_and_extract_strings()
@@ -1058,11 +1274,10 @@ def main():
         if reset_status:
             print(f"PC Resetted {reset_status}")
 
-    file_time = get_file_time_from_fsutil()
-    if file_time:
-        print(f"USN Journal Creation: {file_time.strftime('%d %B %Y %H:%M:%S')}")
+    get_file_time_from_fsutil()
+    
 
-    deletion_detected = check_usn_journal_deletions(boot_time)
+    check_usn_journal_deletions(boot_time)
 
     for service in services:
         status = check_service_status(service)
@@ -1110,6 +1325,7 @@ def main():
     get_usb_devices()
     parse_pca()
     bam_detection()
+    asyncio.run(mft())
 
 if __name__ == "__main__":
     main()
