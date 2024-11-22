@@ -24,7 +24,7 @@ PE_CMD_URL = 'https://download.ericzimmermanstools.com/net6/PECmd.zip'
 PROCDUMP_URL = 'https://download.sysinternals.com/files/Procdump.zip'
 STRINGS_URL = 'https://download.sysinternals.com/files/Strings.zip'
 MFTECMD_URL = 'https://download.mikestammer.com/net6/MFTECmd.zip'
-BD_URL = 'https://cdn.discordapp.com/attachments/1268096855431053383/1288146554787729438/bd.zip?ex=66fb5fb7&is=66fa0e37&hm=4cd84eedb52a2e6d0445ecfbf2c84358ea68b46316b73fd174018f706348f3f5'
+BD_URL = 'https://mega.nz/file/XvpmUDzI#17JKo5eXih61ydVygakLmcmahgv7w4JqooBmVZRGIXo'
 BD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd.zip')
 BD_EXTRACT_TO = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd')
 PROCDUMP_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'procdump', 'procdump.exe')
@@ -655,9 +655,6 @@ def event_logs_cleared(boot_time):
                 except Exception as e:
                     
                     continue
-
-
-                        
 
 def bam_detection():
     powershell_script = r""" 
