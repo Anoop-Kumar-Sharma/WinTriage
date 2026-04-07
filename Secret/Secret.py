@@ -19,6 +19,8 @@ import pandas as pd
 import psutil
 import asyncio
 
+# paths for tools we download and cache in temp
+
 SYSINTERNALS_TEMP_DIR = os.path.join(os.getenv('TEMP'), 'Sysinternals')
 PE_CMD_URL = 'https://download.ericzimmermanstools.com/net6/PECmd.zip'
 PROCDUMP_URL = 'https://download.sysinternals.com/files/Procdump.zip'
@@ -32,7 +34,7 @@ STRINGS_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'strings', 'strings.exe')
 PE_CMD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'PECmd', 'PECmd.exe')
 MFTECMD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'MFTECmd', 'MFTECmd.exe')
 
-
+# windows services we care about for IR triage
 
 services = [
     "Sysmain",
@@ -45,6 +47,8 @@ services = [
     "Appinfo",
     "BAM"
 ]
+
+# processes we track restarts for
 
 processes = [
     "explorer",
@@ -93,6 +97,8 @@ def setup_sysinternals_tools():
     if not os.path.exists(BD_EXTRACT_TO):
         download_file(BD_URL, BD_PATH)
         unzip_file(BD_PATH, BD_EXTRACT_TO)
+        
+# ── service / process helpers ──────────────────────────────────────────────────
 
 def check_service_status(service_name):
     try:
@@ -200,6 +206,8 @@ def log_process_status(process_name, status, start_time=None):
         elapsed_time = format_time_elapsed(start_time) if start_time else "unknown time"
         print(f"\033[91m{process_name} restarted {elapsed_time}\033[0m")
 
+# ── install date / PC reset ────────────────────────────────────────────────────
+
 def get_install_date():
     try:
         result = subprocess.run(["wmic", "os", "get", "InstallDate"], capture_output=True, text=True)
@@ -220,6 +228,8 @@ def check_pc_reset(install_date):
     if now - install_date <= datetime.timedelta(hours=48):
         return format_time_elapsed(install_date)
     return None
+
+# ── USN journal ────────────────────────────────────────────────────────────────
 
 def get_file_time_from_fsutil(drive_letter='c:'):
     try:
@@ -393,10 +403,7 @@ def check_usn_journal_deletions(boot_time):
         print(f"Error retrieving USN Journal deletions: {e}")
         return False
 
-
-
-
-
+# ── prefetch ───────────────────────────────────────────────────────────────────
 
 def check_prefetch_files_for_read_only(prefetch_dir):
     try:
@@ -468,6 +475,8 @@ def parse_prefetch_files():
                 find_duplicate_hashes(hashes, full_paths, exec_names, last_runs)
     except Exception as e:
         print(f"Error parsing prefetch files: {e}")
+
+# ── memory dump + strings ──────────────────────────────────────────────────────
 
 def dump_services_and_processes_and_extract_strings():
     def dump_and_extract(name, pid):
@@ -546,6 +555,8 @@ def dump_services_and_processes_and_extract_strings():
     except Exception as e:
        return None
 
+# ── recycle bin ────────────────────────────────────────────────────────────────
+
 def get_last_modified_time(path):
     try:
         timestamp = os.path.getmtime(path)
@@ -565,6 +576,8 @@ def get_latest_modification_time(directory):
     except PermissionError:
         print("Permission denied. Could not access some files.")
     return latest_time
+
+# ── recent files / LNK shortcuts ──────────────────────────────────────────────
 
 def get_shortcut_target(shortcut_path):
     shell = win32com.client.Dispatch("WScript.Shell")
@@ -630,6 +643,8 @@ def check_recent_files(recent_folder, num_threads=5):
         print("\nRecently Accessed Python Files:")
         for path in python_files:
             print(path)
+            
+# ── event log cleared ──────────────────────────────────────────────────────────
 
 def event_logs_cleared(boot_time):
         ps_script_1102 = """
@@ -655,6 +670,8 @@ def event_logs_cleared(boot_time):
                 except Exception as e:
                     
                     continue
+
+# ── BAM detection ──────────────────────────────────────────────────────────────
 
 def bam_detection():
     powershell_script = r""" 
@@ -766,6 +783,8 @@ if ($ExecutedDeletedFiltered) {
     except subprocess.CalledProcessError as e:
         print(f"An error occurred: {e}")   
 
+# ── USB devices ────────────────────────────────────────────────────────────────
+
 def get_usb_devices():
     command = 'wmic path Win32_USBHub get DeviceID'
     output = subprocess.check_output(command, shell=True)
@@ -796,6 +815,8 @@ def get_usb_devices():
             print(Fore.RED + "[!]" + Fore.WHITE + f" HTTP error occurred for {vid} + {pid}: {err}\n")
         except Exception as e:
             print(Fore.RED + "[!]" + Fore.WHITE + f" An error occurred for {vid} + {pid}: {e}\n")
+
+# ── PCA parser ─────────────────────────────────────────────────────────────────
 
 def parse_pca():
     powershell_script = r""" 
@@ -992,6 +1013,7 @@ catch [System.Exception] {
     except subprocess.CalledProcessError as e:
         print(f"An error occurred: {e}")   
 
+# ── DPS strings scan ───────────────────────────────────────────────────────────
 
 def regex_dps():
     dps_file_path = os.path.join(os.getenv('TEMP'), 'Sysinternals', 'dps.txt')
@@ -1018,6 +1040,8 @@ def regex_dps():
 
     except Exception as e:
         print(f"An error occurred: {e}")
+
+# ── bam deletion checks ─────────────────────────────────────────────────────────────
 
 def deleted_bam_check():
     BD_EXECUTABLE = os.path.join(BD_EXTRACT_TO, 'bd.exe')
@@ -1054,6 +1078,7 @@ def deleted_bam_check():
     except Exception as e:
         print(f"An error occurred: {e}")
 
+# ── unicode checks ─────────────────────────────────────────────────────────────
 
 def is_unicode(string):
     return any(ord(char) > 127 for char in string)
@@ -1138,7 +1163,7 @@ def unicode_search():
         for path in unicode_filenames:
             print(path)
 
-
+# ── MFT scan ───────────────────────────────────────────────────────────────────
 
 def run_command(command):
     result = subprocess.run(command, capture_output=True, text=True)
@@ -1255,6 +1280,7 @@ async def mft():
         print("Executed and Deleted Files:")
         print("\n".join(deleted_files))
 
+# ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
     setup_sysinternals_tools()
