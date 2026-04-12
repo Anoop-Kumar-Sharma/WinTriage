@@ -22,11 +22,11 @@ import asyncio
 # paths for tools we download and cache in temp
 
 SYSINTERNALS_TEMP_DIR = os.path.join(os.getenv('TEMP'), 'Sysinternals')
-PE_CMD_URL = 'https://download.ericzimmermanstools.com/net6/PECmd.zip'
+PE_CMD_URL = 'https://download.ericzimmermanstools.com/PECmd.zip'
 PROCDUMP_URL = 'https://download.sysinternals.com/files/Procdump.zip'
 STRINGS_URL = 'https://download.sysinternals.com/files/Strings.zip'
-MFTECMD_URL = 'https://download.mikestammer.com/net6/MFTECmd.zip'
-BD_URL = 'https://mega.nz/file/XvpmUDzI#17JKo5eXih61ydVygakLmcmahgv7w4JqooBmVZRGIXo'
+MFTECMD_URL = 'https://download.mikestammer.com/MFTECmd.zip'
+BD_URL = 'https://def4.pcloud.com/DLZicIKrV7ZHsmCxK7ZGuox7ZZBDMQ5kZ2ZZ14XZZXMNZeHZemZvmZ2GrAxwJ9DOpLGmKP1YzMLFJirD1X/bd.zip'
 BD_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd.zip')
 BD_EXTRACT_TO = os.path.join(SYSINTERNALS_TEMP_DIR, 'bd')
 PROCDUMP_PATH = os.path.join(SYSINTERNALS_TEMP_DIR, 'procdump', 'procdump.exe')
