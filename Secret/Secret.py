@@ -433,7 +433,7 @@ def check_prefetch_files_for_read_only(prefetch_dir):
                 for file in read_only_files:
                     print(file)
         else:
-            print("\033[93m⚠️ No .pf files found.\033[0m")
+            print("\033[93m No .pf files found.\033[0m")
 
     except Exception as e:
         print(f"Error checking prefetch files: {e}")
